@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogTitle, DialogDescription, } from '@/components/ui/dialog';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { createRootRoute, createRoute, createRouter, RouterProvider, Outlet, Link, useNavigate, useSearch, useParams } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -11,6 +11,19 @@ import { Button } from '@/components/ui/button';
 import { Search, ShoppingCart, Heart, UserRound, Menu, X, Plus, Minus, ChevronRight, ArrowRight, Wallet, LogOut, Check, ShieldCheck } from 'lucide-react';
 import { nfts, money, type NFT, type CartItem, type Order } from './data';
 const api = axios.create({ baseURL: '/api' });
+
+// Apenas a API simulada emite esse evento quando uma sessão privada expira.
+api.interceptors.response.use(
+    response => response,
+    error => {
+        if (axios.isAxiosError(error) && error.response?.status === 401 &&
+            !['/login', '/signup'].some(path => error.config?.url?.endsWith(path))) {
+            window.dispatchEvent(new Event('kurio:session-expired'));
+        }
+        return Promise.reject(error);
+    },
+);
+
 const get = async <T,>(url: string): Promise<T> => (await api.get<T>(url)).data;
 const err = (e: unknown) => axios.isAxiosError(e) ? e.response?.data?.message || e.message : 'Ocorreu um erro inesperado';
 type Account = {
@@ -50,18 +63,18 @@ declare module '@tanstack/react-router' {
     }
 }
 export function App() { return <RouterProvider router={router}/>; }
-function useSession() { return useQuery({ queryKey: ['session'], queryFn: () => get<Account | null>('/session') }); }
+function useSession() { return useQuery({ queryKey: ['session'], queryFn: () => get<Account | null>('/session'), refetchInterval: 10_000, refetchOnWindowFocus: true }); }
 function useCart() { return useQuery({ queryKey: ['cart'], queryFn: () => get<CartItem[]>('/cart') }); }
 function useCartUpdate() { const q = useQueryClient(); return useMutation({ mutationFn: async (x: CartItem) => (await api.put<CartItem[]>('/cart', x)).data, onSuccess: () => { q.invalidateQueries({ queryKey: ['cart'] }); q.invalidateQueries({ queryKey: ['quote'] }); } }); }
 function useLogin() { const q = useQueryClient(); return useMutation({ mutationFn: async (x: {
         email: string;
         password: string;
-    }) => (await api.post<Account>('/login', x)).data, onSuccess: () => q.invalidateQueries() }); }
+    }) => (await api.post<Account>('/login', x)).data, onSuccess: account => { q.removeQueries({ predicate: query => query.queryKey[0] !== 'session' }); q.setQueryData(['session'], account); } }); }
 function useSignup() { const q = useQueryClient(); return useMutation({ mutationFn: async (x: {
         name: string;
         email: string;
         password: string;
-    }) => (await api.post<Account>('/signup', x)).data, onSuccess: () => q.invalidateQueries() }); }
+    }) => (await api.post<Account>('/signup', x)).data, onSuccess: account => { q.removeQueries({ predicate: query => query.queryKey[0] !== 'session' }); q.setQueryData(['session'], account); } }); }
 function Thumb({ nft, large = false }: {
     nft: NFT;
     large?: boolean;
@@ -75,7 +88,66 @@ function SiteButton({ children, onClick, disabled = false, }: {
       {children}
     </Button>);
 }
-function Shell() { const s = useSession(); const c = useCart(); const [auth, setAuth] = useState<'login' | 'signup' | null>(null); const [mobile, setMobile] = useState(false); const [notice, setNotice] = useState(''); const count = c.data?.reduce((a, x) => a + x.qty, 0) || 0; const show = (msg: string) => { setNotice(msg); window.setTimeout(() => setNotice(''), 3500); }; return <><LiveUpdates userId={s.data?.id || null}/><header className="topbar"><div className="wrap nav"><Link to="/" className="logo">KURIO</Link><nav className={mobile ? 'nav-links show' : 'nav-links'}><Link to="/" activeProps={{ className: 'active' }} onClick={() => setMobile(false)}>Início</Link><Link to="/" search={{ collection: 'Arte digital' }} onClick={() => setMobile(false)}>Mercado</Link><Link to="/" onClick={() => setMobile(false)}>Criadores</Link><Link to="/" onClick={() => setMobile(false)}>Aprenda</Link></nav><div className="nav-actions"><Link to="/" aria-label="Busca"><Search size={18}/></Link><Link to="/carrinho" aria-label={'Carrinho com ' + count + ' itens'} className="cart-top"><ShoppingCart size={19}/>{count > 0 && <b>{count}</b>}</Link>{s.data ? <Link to="/perfil" className="btn small"><UserRound size={14}/> Perfil</Link> : <button className="btn small" onClick={() => setAuth('login')}><UserRound size={14}/> Entrar</button>}<button className="mobile-menu icon-btn" onClick={() => setMobile(!mobile)} aria-label="Abrir menu"><Menu /></button></div></div></header><main><div className="page"><Outlet /></div></main><Footer />{notice && <div className="toast" role="status">{notice}</div>}{auth && <AuthModal kind={auth} close={() => setAuth(null)} switchMode={setAuth} onSuccess={() => { setAuth(null); show('Bem-vindo ao Kurio!'); }}/>}</>; }
+function Shell() {
+    const q = useQueryClient();
+    const s = useSession();
+    const c = useCart();
+    const [auth, setAuth] = useState<'login' | 'signup' | null>(null);
+    const [mobile, setMobile] = useState(false);
+    const [notice, setNotice] = useState('');
+    const count = c.data?.reduce((sum, item) => sum + item.qty, 0) || 0;
+
+    useEffect(() => {
+        const requireAuth = () => setAuth('login');
+        const sessionExpired = () => {
+            q.removeQueries({ predicate: query => ['cart', 'quote', 'checkout-quote', 'orders', 'order'].includes(String(query.queryKey[0])) });
+            q.setQueryData(['session'], null);
+            setNotice('Sua sessão expirou. Entre novamente para continuar.');
+            setAuth('login');
+        };
+        window.addEventListener('kurio:auth-required', requireAuth);
+        window.addEventListener('kurio:session-expired', sessionExpired);
+        return () => {
+            window.removeEventListener('kurio:auth-required', requireAuth);
+            window.removeEventListener('kurio:session-expired', sessionExpired);
+        };
+    }, [q]);
+
+    const show = (message: string) => {
+        setNotice(message);
+        window.setTimeout(() => setNotice(''), 3500);
+    };
+
+    return <>
+        <LiveUpdates userId={s.data?.id || null}/>
+        <header className="topbar">
+            <div className="wrap nav">
+                <Link to="/" className="logo">KURIO</Link>
+                <nav className={mobile ? 'nav-links show' : 'nav-links'}>
+                    <Link to="/" activeProps={{ className: 'active' }} onClick={() => setMobile(false)}>Início</Link>
+                    <Link to="/" search={{ collection: 'Arte digital' }} onClick={() => setMobile(false)}>Mercado</Link>
+                    <Link to="/" onClick={() => setMobile(false)}>Criadores</Link>
+                    <Link to="/" onClick={() => setMobile(false)}>Aprenda</Link>
+                </nav>
+                <div className="nav-actions">
+                    <Link to="/" aria-label="Busca"><Search size={18}/></Link>
+                    <Link to="/carrinho" aria-label={'Carrinho com ' + count + ' itens'} className="cart-top">
+                        <ShoppingCart size={19}/>{count > 0 && <b>{count}</b>}
+                    </Link>
+                    {s.data
+                        ? <Link to="/perfil" className="btn small"><UserRound size={14}/> Perfil</Link>
+                        : <button className="btn small" onClick={() => setAuth('login')}><UserRound size={14}/> Entrar</button>}
+                    <button className="mobile-menu icon-btn" onClick={() => setMobile(!mobile)} aria-label="Abrir menu"><Menu/></button>
+                </div>
+            </div>
+        </header>
+        <main><div className="page"><Outlet/></div></main>
+        <Footer/>
+        {notice && <div className="toast" role="status">{notice}</div>}
+        {auth && <AuthModal kind={auth} close={() => setAuth(null)} switchMode={setAuth}
+            onSuccess={() => { setAuth(null); show('Bem-vindo ao Kurio!'); }}/>}
+    </>;
+}
 function Footer() { return <footer className="footer"><div className="wrap"><div className="features"><div><span>◉</span><strong>Segurança na compra</strong><p>Transações simuladas com acompanhamento de pedidos.</p></div><div><span>◕</span><strong>Coleções exclusivas</strong><p>Encontre arte digital e colecionáveis únicos.</p></div><div><span>◉</span><strong>Artistas e comunidade</strong><p>Apoie os criadores e descubra novas histórias.</p></div><div className="newsletter"><strong>Novidades em primeira mão</strong><p>Receba novidades sobre lançamentos e coleções.</p><form onSubmit={e => { e.preventDefault(); alert('Demonstração: cadastro de newsletter não disponível'); }}><input type="email" required placeholder="Seu e-mail" aria-label="E-mail"/><button className="btn small">Enviar</button></form></div></div><div className="footer-bottom"><div><b>KURIO</b><p>Seu universo de arte digital.</p></div><span>Mercado · Criadores · Comunidade · Ajuda</span><span>© 2026 Kurio. Projeto demonstrativo.</span></div></div></footer>; }
 function Card({ nft }: {
     nft: NFT;
@@ -155,11 +227,35 @@ function AuthModal({ kind, close, switchMode, onSuccess, }: {
       </DialogContent>
     </Dialog>);
 }
-function Guard({ children }: {
-    children: React.ReactNode;
-}) { const s = useSession(); return s.isLoading ? <div className="centered">Carregando sessão...</div> : s.data ? <>{children}</> : <div className="wrap centered"><UserRound size={32}/><h2>Faça login para continuar</h2><p>Use o botão Entrar no cabeçalho. Conta de teste: demo@kurio.com / Demo1234!</p><Link to="/" className="btn">Voltar ao início</Link></div>; }
+function Guard({ children }: { children: React.ReactNode }) {
+    const s = useSession();
+    useEffect(() => {
+        if (!s.isLoading && !s.data) {
+            window.dispatchEvent(new Event('kurio:auth-required'));
+        }
+    }, [s.isLoading, s.data]);
+
+    if (s.isLoading) return <div className="wrap centered">Carregando sessão...</div>;
+    if (s.data) return <>{children}</>;
+    return <div className="wrap centered">
+        <UserRound size={32}/>
+        <h2>Entre novamente para continuar</h2>
+        <p>Seu carrinho permanece salvo. Após entrar, você continuará nesta página.</p>
+        <button className="btn" onClick={() => window.dispatchEvent(new Event('kurio:auth-required'))}>Entrar</button>
+    </div>;
+}
 function Checkout() { return <Guard><CheckoutInner /></Guard>; }
-function CheckoutInner() { const s = useSession(); const cart = useCart(); const nav = useNavigate(); const [wallet, setWallet] = useState(''); const [network, setNetwork] = useState('Ethereum'); const [coupon, setCoupon] = useState(''); const [scenario, setScenario] = useState<'confirmed' | 'pending' | 'refused'>('confirmed'); const [error, setError] = useState(''); const [confirmed, setConfirmed] = useState(false); const [key] = useState(() => crypto.randomUUID()); const quote = useQuery({ queryKey: ['checkout-quote', cart.data, coupon], queryFn: () => api.post<{
+function CheckoutInner() { const s = useSession(); const cart = useCart(); const nav = useNavigate(); const draftKey = 'kurio-checkout-draft:' + (s.data?.id || 'guest');
+    const [draft] = useState<Partial<{ wallet: string; network: string; coupon: string; scenario: 'confirmed' | 'pending' | 'refused'; idempotencyKey: string }>>(() => {
+        try { return JSON.parse(sessionStorage.getItem(draftKey) || '{}'); } catch { return {}; }
+    });
+    const [wallet, setWallet] = useState(draft.wallet || '');
+    const [network, setNetwork] = useState(draft.network || 'Ethereum');
+    const [coupon, setCoupon] = useState(draft.coupon || '');
+    const [scenario, setScenario] = useState<'confirmed' | 'pending' | 'refused'>(draft.scenario || 'confirmed'); const [error, setError] = useState(''); const [confirmed, setConfirmed] = useState(false); const [key] = useState(() => draft.idempotencyKey || crypto.randomUUID());
+    useEffect(() => {
+        sessionStorage.setItem(draftKey, JSON.stringify({ wallet, network, coupon, scenario, idempotencyKey: key }));
+    }, [draftKey, wallet, network, coupon, scenario, key]); const quote = useQuery({ queryKey: ['checkout-quote', cart.data, coupon], queryFn: () => api.post<{
         subtotal: string;
         discount: string;
         fee: string;
@@ -170,7 +266,7 @@ function CheckoutInner() { const s = useSession(); const cart = useCart(); const
         setConfirmed(false);
         await quote.refetch();
         throw new Error('Os valores mudaram. Revise o resumo e confirme novamente.');
-    } return (await api.post<Order>('/orders', { wallet: wallet || s.data?.wallets[0], coupon, idempotencyKey: key, scenario })).data; }, onSuccess: o => nav({ to: '/pedido/$id', params: { id: o.id } }), onError: e => setError(e instanceof Error && !axios.isAxiosError(e) ? e.message : err(e)) }); return <div className="wrap"><div className="breadcrumbs"><Link to="/carrinho">Carrinho</Link> / Pagamento</div><h1 className="section-title">Pagamento</h1><div className="checkout-layout"><div className="form-panel"><h2>Dados do colecionador</h2><label>Nome completo<input disabled value={s.data?.name || ''}/></label><label>E-mail<input disabled value={s.data?.email || ''}/></label><h2>Pagamento e carteira</h2>{s.data?.wallets.length ? <><label>Carteira<select value={wallet || s.data.wallets[0]} onChange={e => setWallet(e.target.value)}>{s.data.wallets.map(w => <option key={w} value={w}>{w.slice(0, 12)}...{w.slice(-6)}</option>)}</select></label><label>Rede<select value={network} onChange={e => setNetwork(e.target.value)}><option>Ethereum</option><option>Polygon</option><option>Solana</option></select></label></> : <p className="error">Você precisa cadastrar uma carteira. <Link to="/carteiras">Cadastrar carteira</Link></p>}<p className="muted">A carteira e o pagamento são simulados; não há conexão com blockchain real.</p><label>Cenário do pagamento (demonstração)<select value={scenario} onChange={e => { setScenario(e.target.value as typeof scenario); setConfirmed(false); }}><option value="confirmed">Pagamento confirmado</option><option value="pending">Pagamento pendente (confirma após 2 segundos)</option><option value="refused">Pagamento recusado</option></select></label><label>Cupom<input value={coupon} onChange={e => setCoupon(e.target.value)} placeholder="KURIO10"/></label><label className="checkbox-line"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)}/> Confirmo os itens, valores e condições da compra.</label>{error && <p className="error" role="alert">{error}</p>}{quote.isError && <p className="error" role="alert">{err(quote.error)}</p>}<SiteButton disabled={!confirmed || !cart.data?.length || !s.data?.wallets.length || purchase.isPending || quote.isError || !quote.data || quote.isFetching} onClick={() => purchase.mutate()}>{purchase.isPending ? 'Enviando pedido...' : 'Confirmar pedido'}</SiteButton></div><aside className="summary"><h3>Resumo do pedido</h3>{(cart.data || []).map(x => { const n = nfts.find(n => n.id === x.id)!; return <div className="summary-product" key={x.id}><img src={n.image} alt={n.name}/><span>{n.name}<small>Quantidade: {x.qty}</small></span><b>{money(Number(n.price) * x.qty)}</b></div>; })}<div><span>Subtotal</span><b>{quote.data?.subtotal || '—'} ETH</b></div><div><span>Desconto</span><b>{quote.data?.discount || '—'} ETH</b></div><div><span>Taxa de rede</span><b>{quote.data?.fee || '—'} ETH</b></div><div className="summary-total"><span>Total</span><b>{quote.data?.total || '—'} ETH</b></div><p className="muted"><ShieldCheck size={15}/> Compra protegida na simulação</p></aside></div></div>; }
+    } return (await api.post<Order>('/orders', { wallet: wallet || s.data?.wallets[0], coupon, idempotencyKey: key, scenario })).data; }, onSuccess: o => { sessionStorage.removeItem(draftKey); nav({ to: '/pedido/$id', params: { id: o.id } }); }, onError: e => setError(e instanceof Error && !axios.isAxiosError(e) ? e.message : err(e)) }); return <div className="wrap"><div className="breadcrumbs"><Link to="/carrinho">Carrinho</Link> / Pagamento</div><h1 className="section-title">Pagamento</h1><div className="checkout-layout"><div className="form-panel"><h2>Dados do colecionador</h2><label>Nome completo<input disabled value={s.data?.name || ''}/></label><label>E-mail<input disabled value={s.data?.email || ''}/></label><h2>Pagamento e carteira</h2>{s.data?.wallets.length ? <><label>Carteira<select value={wallet || s.data.wallets[0]} onChange={e => setWallet(e.target.value)}>{s.data.wallets.map(w => <option key={w} value={w}>{w.slice(0, 12)}...{w.slice(-6)}</option>)}</select></label><label>Rede<select value={network} onChange={e => setNetwork(e.target.value)}><option>Ethereum</option><option>Polygon</option><option>Solana</option></select></label></> : <p className="error">Você precisa cadastrar uma carteira. <Link to="/carteiras">Cadastrar carteira</Link></p>}<p className="muted">A carteira e o pagamento são simulados; não há conexão com blockchain real.</p><label>Cenário do pagamento (demonstração)<select value={scenario} onChange={e => { setScenario(e.target.value as typeof scenario); setConfirmed(false); }}><option value="confirmed">Pagamento confirmado</option><option value="pending">Pagamento pendente (confirma após 2 segundos)</option><option value="refused">Pagamento recusado</option></select></label><label>Cupom<input value={coupon} onChange={e => setCoupon(e.target.value)} placeholder="KURIO10"/></label><label className="checkbox-line"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)}/> Confirmo os itens, valores e condições da compra.</label>{error && <p className="error" role="alert">{error}</p>}{quote.isError && <p className="error" role="alert">{err(quote.error)}</p>}<SiteButton disabled={!confirmed || !cart.data?.length || !s.data?.wallets.length || purchase.isPending || quote.isError || !quote.data || quote.isFetching} onClick={() => purchase.mutate()}>{purchase.isPending ? 'Enviando pedido...' : 'Confirmar pedido'}</SiteButton></div><aside className="summary"><h3>Resumo do pedido</h3>{(cart.data || []).map(x => { const n = nfts.find(n => n.id === x.id)!; return <div className="summary-product" key={x.id}><img src={n.image} alt={n.name}/><span>{n.name}<small>Quantidade: {x.qty}</small></span><b>{money(Number(n.price) * x.qty)}</b></div>; })}<div><span>Subtotal</span><b>{quote.data?.subtotal || '—'} ETH</b></div><div><span>Desconto</span><b>{quote.data?.discount || '—'} ETH</b></div><div><span>Taxa de rede</span><b>{quote.data?.fee || '—'} ETH</b></div><div className="summary-total"><span>Total</span><b>{quote.data?.total || '—'} ETH</b></div><p className="muted"><ShieldCheck size={15}/> Compra protegida na simulação</p></aside></div></div>; }
 function Profile() { return <Guard><ProfileInner /></Guard>; }
 function ProfileInner() { const s = useSession(); const q = useQueryClient(); const [name, setName] = useState(s.data?.name || ''); const [password, setPassword] = useState(''); const [notice, setNotice] = useState(''); const update = useMutation({ mutationFn: () => api.put('/profile', { name, password: password || undefined }), onSuccess: () => { q.invalidateQueries({ queryKey: ['session'] }); setNotice('Perfil atualizado'); }, onError: e => setNotice(err(e)) }); return <div className="wrap account-layout"><AccountNav /><div className="form-panel"><h1>Meu perfil</h1><div className="profile-avatar"><UserRound size={36}/></div><label>Nome completo<input value={name} onChange={e => setName(e.target.value)}/></label><label>E-mail<input disabled value={s.data?.email || ''}/></label><label>Nova senha (opcional)<input type="password" minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="No mínimo 8 caracteres"/></label><SiteButton onClick={() => update.mutate()} disabled={update.isPending}>Salvar alterações</SiteButton>{notice && <p role="status">{notice}</p>}</div></div>; }
 function AccountNav() { const q = useQueryClient(); const navigate = useNavigate(); return <aside className="account-nav"><h3>Minha conta</h3><Link to="/perfil"><UserRound size={16}/> Meu perfil</Link><Link to="/carteiras"><Wallet size={16}/> Minhas carteiras</Link><Link to="/pedidos"><ShoppingCart size={16}/> Meus pedidos</Link><button onClick={async () => { await api.post('/logout'); q.clear(); navigate({ to: '/' }); }}><LogOut size={16}/> Sair</button></aside>; }
