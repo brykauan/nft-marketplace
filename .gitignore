@@ -1,3 +1,4 @@
+
 # Logs
 logs
 *.log
@@ -7,16 +8,33 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Dependências
+node_modules/
+
+# Build
+dist/
+dist-ssr/
 *.local
 
-# Editor directories and files
+# Testes
+test-results/
+playwright-report/
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# Variáveis de ambiente
+.env
+.env.*
+!.env.example
+
+# Editor
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
