@@ -37,3 +37,7 @@ A UI é uma aproximação visual do Figma, pois o ZIP original continha uma imag
 
 ### Pendências críticas da avaliação
 A implementação ainda NÃO atende integralmente ao desafio: falta servidor Socket.IO simulado integrado ao MSW, eventos reais `nft.updated` e `order.updated`, estados pendente/recusado, fluxos de recuperação robustos, shadcn/ui efetivo, cobertura E2E completa e medições Lighthouse. As senhas da demonstração continuam persistidas em texto claro e precisam ser corrigidas antes da entrega. A versão atual é uma base funcional, não uma submissão final validada.
+
+## Atualizações em tempo real
+
+Consulte [SOCKET-README.md](./SOCKET-README.md) para os eventos simulados via Socket.IO/MSW, cenários manuais e testes automatizados.

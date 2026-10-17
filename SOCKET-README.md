@@ -1,17 +1,30 @@
-# Socket.IO simulado com MSW
+# Tempo real: Socket.IO + MSW
 
-Instale dependências com `npm.cmd install` e rode `npm.cmd run dev`.
+O `socket.io-client` abre uma conexão WebSocket no caminho `/socket.io/`. O MSW intercepta a conexão com `ws.link` e `@mswjs/socket.io-binding`. Isso permite desenvolver e demonstrar os eventos sem um backend externo.
 
-O cliente `socket.io-client` usa transporte `websocket` e se conecta ao caminho `/socket.io` no próprio origin. A interceptação de WebSocket é feita por MSW usando `@mswjs/socket.io-binding`. Nenhum backend real é necessário.
+## Eventos
 
-**Como testar o evento `nft.updated`:** abra o marketplace e, no console do navegador, execute:
+- `nft.updated`: `{ id, version, nft }`. Invalida catálogo, detalhe, carrinho e cotação, permitindo sincronizar pelo REST.
+- `order.updated`: `{ id, version, userId, status, order }`. A UI descarta eventos antigos ou repetidos e não aplica eventos de outro usuário.
+- Ao conectar ou reconectar, todas as queries relevantes são invalidadas e sincronizadas pela API.
+
+## Demonstrar mudança de preço
+
+Abra a Home e execute no console do navegador:
 
 ```js
-fetch('/api/scenarios/nft-update', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:1,price:'1.39',stock:2})}).then(r=>r.json()).then(console.log)
+fetch('/api/scenarios/nft-update', {
+  method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({id: 1, price: '1.49', stock: 2})
+}).then(r => r.json()).then(console.log)
 ```
 
-O handler altera o catálogo da API simulada e emite `nft.updated` por Socket.IO. A UI invalida a listagem, detalhes, carrinho e cotação; o checkout deve revalidar os valores.
+Verifique se o card Emerald Ape mudou sem refresh. O mesmo valor deve aparecer nas cotações subsequentes. Use `npx.cmd playwright test tests/realtime.spec.ts` para testar no Windows.
 
-**`order.updated`:** é emitido quando `/api/orders` confirma um pedido. A UI aceita apenas atualizações da sessão autenticada e rejeita versões antigas ou duplicadas. Após reconexão, o cliente revalida dados ativos via REST.
+## Pedidos
 
-**Limitações atuais:** a implementação não simula ainda pedidos `pending`/`refused` nem o atraso/reconexão desses pedidos; o binding do MSW não é um servidor Socket.IO com paridade integral. Eventos mockados podem não atravessar abas, pois o banco e os sockets ficam no contexto local. O Socket.IO precisa de testes reais no navegador antes da entrega.
+Pedidos emitirão `order.updated` na criação e ao concluir a simulação pendente. Para acionar manualmente a transição de um pedido pendente autenticado, POST `/api/scenarios/settle-order` com `{ "id": "ID", "status": "confirmed" }` ou `"refused"`. O pedido deve estar pendente e pertencer à sessão atual.
+
+## Limites do ambiente de demonstração
+
+O MSW guarda conexões e mudanças em memória no contexto da página. Não é um backend compartilhado entre navegadores nem implementa todos os recursos do protocolo Socket.IO. O cenário pendente ainda permite conciliação via polling REST, como fallback. É necessário validar os eventos no navegador depois de instalar dependências no Windows.
