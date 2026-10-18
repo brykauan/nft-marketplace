@@ -659,7 +659,9 @@ p {
 }
 
 .breadcrumbs a {
-    color: #e2a365
+    color: #e2a365;
+    text-decoration: underline;
+    text-underline-offset: 2px
 }
 
 .section-title,
@@ -1612,4 +1614,28 @@ p {
   background: #47231f;
   border-color: #87443b;
   color: #f3a397;
+}
+
+
+/* Reserva de layout para evitar deslocamento durante a busca do NFT. */
+.detail-loading {
+    min-height: 1070px;
+}
+.detail-loading-breadcrumb {
+    padding-block: 30px;
+}
+.detail-placeholder-breadcrumb { width: 220px; height: 12px; }
+.detail-placeholder-thumb { width: 75px; aspect-ratio: 1; }
+.detail-placeholder-main { aspect-ratio: 1; flex: 1 1 auto; min-width: 0; }
+.detail-placeholder-line { height: 13px; width: 100%; margin-bottom: 18px; }
+.detail-placeholder-line.short { width: 38%; }
+.detail-placeholder-line.medium { width: 66%; }
+.detail-placeholder-line.title { height: 34px; width: 85%; margin: 20px 0; }
+.detail-placeholder-button { width: 220px; height: 42px; margin-top: 26px; }
+.detail-loading .detail-divider { margin: 30px 0; }
+.detail-loading .description { margin-bottom: 55px; }
+.detail-placeholder-card { width: 100%; aspect-ratio: .77; }
+@media (max-width: 670px) {
+    .detail-loading { min-height: 1700px; }
+    .detail-placeholder-thumb { width: 75px; }
 }
